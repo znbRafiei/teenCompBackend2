@@ -1,9 +1,10 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from .serializers import RegisterSerializer
+from .serializers import RegisterSerializer,UserSerializer
 from django.contrib.auth.models import User
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken,AccessToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.contrib.auth import authenticate
 from rest_framework.permissions import IsAuthenticated
 from .models import User
@@ -59,23 +60,79 @@ class LoginView(APIView):
             "refresh_token": str(refresh)
         }, status=status.HTTP_200_OK)
     
+# class LogoutView(APIView):
+#     def post(self, request):
+#         refresh_token = request.data.get("refresh_token")
+        
+#         if not refresh_token:
+#             return Response(
+#                 {"error": "Refresh token is required."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         try:
+#             token = RefreshToken(refresh_token)
+#             token.blacklist()  # بلاک کردن توکن
+#             return Response({"message": "Successfully logged out."}, status=status.HTTP_200_OK)
+#         except Exception as e:
+#             return Response(
+#                 {"error": "Token is invalid or expired."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+# class LogoutView(APIView):
+#     authentication_classes = [JWTAuthentication]
+#     permission_classes = [IsAuthenticated]
+
+#     def post(self, request):
+#         refresh_token = request.data.get("refresh_token")
+#         access_token = request.META.get('HTTP_AUTHORIZATION', '').replace('Bearer ', '').strip()
+
+#         if not refresh_token:
+#             return Response(
+#                 {"error": "Refresh token is required."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         try:
+#             # بلاک کردن refresh token
+#             token = RefreshToken(refresh_token)
+#             token.blacklist()
+#         except Exception as e:
+#             return Response(
+#                 {"error": "Invalid or expired refresh token."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         # بلاک کردن access token (اگر وجود داشته باشه)
+#         if access_token:
+#             try:
+#                 access_token_obj = AccessToken(access_token)
+#                 access_token_obj.blacklist()
+#             except:
+#                 pass
+
+#         return Response({"message": "Successfully logged out."}, status=status.HTTP_200_OK)
+
 class LogoutView(APIView):
     def post(self, request):
-        refresh_token = request.data.get("refresh_token")
-        
-        if not refresh_token:
-            return Response(
-                {"error": "Refresh token is required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         try:
+            refresh_token = request.data.get("refresh_token")
+            if not refresh_token:
+                return Response(
+                    {"error": "Refresh token is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             token = RefreshToken(refresh_token)
-            token.blacklist()  # بلاک کردن توکن
-            return Response({"message": "Successfully logged out."}, status=status.HTTP_200_OK)
+            token.blacklist()  # ✅ توکن رو منقضی می‌کنه
+
+            return Response(
+                {"message": "Successfully logged out."},
+                status=status.HTTP_200_OK
+            )
         except Exception as e:
             return Response(
-                {"error": "Token is invalid or expired."},
+                {"error": "Token is invalid or already blacklisted."},
                 status=status.HTTP_400_BAD_REQUEST
             )
             
@@ -144,3 +201,48 @@ class UpdateProfileView(APIView):
             "profile_picture": user.profile_picture,
             "created_at": user.date_joined
         }, status=status.HTTP_200_OK)
+        
+class ListAllUsersView(APIView):
+    def get(self, request):
+        if not request.user.is_authenticated:
+            return Response(
+                {"error": "Authentication required."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if request.user.username != "adminTeenComp":
+            return Response(
+                {"error": "You are not authorized to perform this action."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        users = User.objects.all()
+        serializer = UserSerializer(users, many=True)
+        return Response({
+            "users": serializer.data
+        }, status=status.HTTP_200_OK)
+        
+class UserDetailsView(APIView):
+    def get(self, request, user_id):
+        if not request.user.is_authenticated:
+            return Response(
+                {"error": "Authentication required."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if request.user.username != "adminTeenComp":
+            return Response(
+                {"error": "You are not authorized to perform this action."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = UserSerializer(user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
