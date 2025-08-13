@@ -257,14 +257,14 @@ class MyCourseSerializer(serializers.ModelSerializer):
             progress = UserProgress.objects.get(user=request.user, course=obj)
             return {
                 "completed": progress.completed,
-                "last_section": (
-                    progress.last_section.section_name
-                    if progress.last_section
-                    else None
-                ),
-                "last_content": (
-                    progress.last_content.title if progress.last_content else None
-                ),
+                # "last_section": (
+                #     progress.last_section.section_name
+                #     if progress.last_section
+                #     else None
+                # ),
+                # "last_content": (
+                #     progress.last_content.title if progress.last_content else None
+                # ),
                 "updated_at": progress.updated_at,
             }
         except UserProgress.DoesNotExist:
@@ -320,23 +320,53 @@ class CourseSectionStatusSerializer(serializers.ModelSerializer):
         if obj.order_number == 1:
             return True
 
-        # چک کردن تمام سرفصل‌هایی که ویدیویشون ۸۰٪ دیده شده
+        # چک کردن اینکه آیا کاربر ۸۰٪ ویدیوی سرفصل قبلی رو دیده
+        # try:
+        #     prev_section = Section.objects.get(
+        #         course=course,
+        #         order_number=obj.order_number - 1
+        #     )
+        #     video_content = prev_section.contents.get(content_type='video')
+        #     progress = video_content.usercontentprogress_set.get(user=user)
+        #     if progress.is_completed:
+        #         return True
+        # except:
+        #     pass
+         # چک کردن تمام سرفصل‌هایی که ویدیویشون ۸۰٪ دیده شده
         for section in Section.objects.filter(course=course):
             try:
                 video_content = section.contents.get(content_type='video')
                 progress = video_content.usercontentprogress_set.get(user=user)
                 if progress.is_completed:
                     # اگر ویدیو ۸۰٪ دیده شده، دو سرفصل بعدی باز میشن
-                    next_sections = unlock_next_sections(user, section)
+                    next_sections = unlock_next_sections(user, section, num_sections=2)
                     if obj in next_sections:
                         return True
             except:
                 continue
-
-        # چک کردن اینکه آیا کاربر در حال حاضر در guide card است و مجاز به ورود به challenge است
+            
+         # چک کردن اینکه آیا کاربر در حال حاضر در guide card است و مجاز به ورود به challenge است
         try:
             current_guide_content = obj.contents.get(content_type='guide_card')
             if can_access_challenge(user, current_guide_content):
+                return True
+        except:
+            pass
+
+        
+        # چک کردن اینکه آیا کاربر چالش سرفصل قبلی رو حل کرده
+        try:
+            prev_section = Section.objects.get(
+                course=course,
+                order_number=obj.order_number - 1
+            )
+            challenge_content = prev_section.contents.get(content_type='challenge')
+            attempts = ChallengeAttempt.objects.filter(
+                user=user,
+                content=challenge_content,
+                is_successful=True
+            )
+            if attempts.exists():
                 return True
         except:
             pass
@@ -379,8 +409,64 @@ class SectionContentSerializer(serializers.Serializer):
     challenge_attempts = ChallengeAttemptSummarySerializer(required=False)
     
 class SubmitChallengeSerializer(serializers.Serializer):
-    answers = serializers.ListField(child=serializers.CharField(), required=True)
+    # ✅ تغییر از DictField به JSONField
+    answers = serializers.JSONField(required=True)
 
+    def validate_answers(self, value):
+        # ✅ گرفتن challenge_data از context
+        challenge_data = self.context.get('challenge_data', {})
+        q_type = challenge_data.get("type")
+
+        if not q_type:
+            raise serializers.ValidationError("Invalid challenge type.")
+
+        # ۱. چندگزینه‌ای یک‌درست
+        if q_type == "multiple_choice_single":
+            if not isinstance(value, list) or len(value) != 1:
+                raise serializers.ValidationError("Answer must be a list with one option.")
+            return value
+
+        # ۲. چندگزینه‌ای چنددرست
+        elif q_type == "multiple_choice_multiple":
+            if not isinstance(value, list):
+                raise serializers.ValidationError("Answer must be a list of selected options.")
+            return value
+
+        # ۳. جدولی (Drag & Drop Table)
+        elif q_type == "drag_drop_table":
+            if not isinstance(value, list):
+                raise serializers.ValidationError("Answers must be a list of column mappings.")
+            columns = challenge_data.get("columns", [])
+            if len(value) != len(columns):
+                raise serializers.ValidationError("Number of columns does not match.")
+            for col in value:
+                if not isinstance(col, dict):
+                    raise serializers.ValidationError("Each column must be an object.")
+                if "title" not in col or "options" not in col:
+                    raise serializers.ValidationError("Each column must have 'title' and 'options'.")
+            return value
+
+        # ۴. تصویری با زیرسوال
+        elif q_type == "image_based_mcq":
+            if not isinstance(value, dict):
+                raise serializers.ValidationError("Answers must be a dictionary.")
+            sub_questions = challenge_data.get("sub_questions", [])
+            if len(value) != len(sub_questions):
+                raise serializers.ValidationError("Number of answers does not match.")
+            return value
+
+        # ۵. تشریحی
+        elif q_type == "descriptive":
+            if not isinstance(value, dict):
+                raise serializers.ValidationError("Answers must be a dictionary.")
+            sub_questions = challenge_data.get("sub_questions", [])
+            if len(value) != len(sub_questions):
+                raise serializers.ValidationError("Number of answers does not match.")
+            return value
+
+        else:
+            raise serializers.ValidationError("Unsupported challenge type.")
+        
 class ChallengeAttemptSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChallengeAttempt

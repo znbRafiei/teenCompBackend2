@@ -40,6 +40,7 @@ from django.utils import timezone
 from accounts.models import User
 from django.db.models import Count, Q 
 from .utils import can_access_challenge
+from .ai_evaluator import evaluate_answer_with_ai
 
 class ListCoursesView(APIView):
     def get(self, request):
@@ -1206,6 +1207,277 @@ class GetCurrentSectionContent(APIView):
             "content": serializer.data
         }, status=status.HTTP_200_OK)
         
+# class SubmitChallengeView(APIView):
+#     def post(self, request, challenge_id):
+#         if not request.user.is_authenticated:
+#             return Response(
+#                 {"error": "Authentication required."},
+#                 status=status.HTTP_401_UNAUTHORIZED
+#             )
+
+#         try:
+#             challenge_content = Content.objects.get(
+#                 id=challenge_id,
+#                 content_type='challenge'
+#             )
+#         except Content.DoesNotExist:
+#             return Response(
+#                 {"error": "Challenge not found."},
+#                 status=status.HTTP_404_NOT_FOUND
+#             )
+
+#         section = challenge_content.section
+#         course = section.course
+
+#         # چک کردن اینکه آیا کاربر ۸۰٪ ویدیوی سرفصل قبلی رو دیده
+#         try:
+#             prev_section = Section.objects.get(
+#                 course=course,
+#                 order_number=section.order_number - 1
+#             )
+#             video_content = prev_section.contents.get(content_type='video')
+#             progress = UserContentProgress.objects.get(
+#                 user=request.user,
+#                 content=video_content
+#             )
+#             if not progress.is_completed:
+#                 return Response({
+#                     "error": "You must watch 80% of the previous video to attempt this challenge."
+#                 }, status=status.HTTP_403_FORBIDDEN)
+#         except:
+#             return Response({
+#                 "error": "Prerequisite video not found or not completed."
+#             }, status=status.HTTP_403_FORBIDDEN)
+
+#         # دیسیریالایز و اعتبارسنجی پاسخ
+#         serializer = SubmitChallengeSerializer(data=request.data)
+#         if not serializer.is_valid():
+#             return Response(
+#                 {"error": "Invalid input."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         user_answers = serializer.validated_data['answers']
+#         correct_answer = challenge_content.challenge_data.get('correct_answer')
+
+#         # بررسی پاسخ
+#         is_correct = user_answers == [correct_answer]  # یا منطق پیچیده‌تر برای چندگزینه‌ای
+
+#         # ثبت تلاش
+#         attempt_number = ChallengeAttempt.objects.filter(
+#             user=request.user,
+#             content=challenge_content
+#         ).count() + 1
+
+#         ChallengeAttempt.objects.create(
+#             user=request.user,
+#             content=challenge_content,
+#             attempt_number=attempt_number,
+#             is_successful=is_correct
+#         )
+
+#         # 🔹 اگر پاسخ درست بود
+#         if is_correct:
+#             # باز کردن سرفصل بعدی
+#             try:
+#                 next_section = Section.objects.get(
+#                     course=course,
+#                     order_number=section.order_number + 1
+#                 )
+#                 # در اینجا می‌تونی یه تابع utility فراخوانی کنیم
+#                 # ولی برای سادگی، فقط یه پیام می‌دیم
+#                 return Response({
+#                     "is_correct": True,
+#                     "message": "Challenge passed! Next section unlocked.",
+#                     "next_section_unlocked": True
+#                 }, status=status.HTTP_200_OK)
+#             except Section.DoesNotExist:
+#                 return Response({
+#                     "is_correct": True,
+#                     "message": "Challenge passed! This is the last section.",
+#                     "next_section_unlocked": False
+#                 }, status=status.HTTP_200_OK)
+
+#         # 🔹 اگر پاسخ غلط بود
+#         if attempt_number >= 3:
+#             # ❌ ۳ تلاش شکست خورده → قفل سرفصل فعلی و قبلی + ریست پیشرفت
+#             try:
+#                 # ریست پیشرفت ویدیوی سرفصل قبلی
+#                 prev_video = prev_section.contents.get(content_type='video')
+#                 UserContentProgress.objects.filter(
+#                     user=request.user,
+#                     content=prev_video
+#                 ).update(
+#                     watched_duration=0,
+#                     total_duration=prev_video.total_duration or 0,
+#                     is_completed=False
+#                 )
+
+#                 # ریست تلاش‌های چالش
+#                 ChallengeAttempt.objects.filter(
+#                     user=request.user,
+#                     content=challenge_content
+#                 ).delete()
+
+#                 # پیام قفل شدن
+#                 return Response({
+#                     "is_correct": False,
+#                     "message": "You've used all attempts. Review previous sections.",
+#                     "attempts_remaining": 0,
+#                     "sections_locked": [section.order_number, section.order_number - 1],
+#                     "progress_reset": True
+#                 }, status=status.HTTP_200_OK)
+#             except:
+#                 pass
+
+#         # 🔹 اگر هنوز تلاش باقی داره
+#         return Response({
+#             "is_correct": False,
+#             "message": f"Challenge failed. {3 - attempt_number} attempts left.",
+#             "attempts_remaining": 3 - attempt_number
+#         }, status=status.HTTP_200_OK)
+
+# class SubmitChallengeView(APIView):
+#     def post(self, request, challenge_id):
+#         if not request.user.is_authenticated:
+#             return Response(
+#                 {"error": "Authentication required."},
+#                 status=status.HTTP_401_UNAUTHORIZED
+#             )
+
+#         try:
+#             challenge_content = Content.objects.get(
+#                 id=challenge_id,
+#                 content_type='challenge'
+#             )
+#         except Content.DoesNotExist:
+#             return Response(
+#                 {"error": "Challenge not found."},
+#                 status=status.HTTP_404_NOT_FOUND
+#             )
+
+#         section = challenge_content.section  # سرفصل فعلی (چالش)
+#         course = section.course
+
+#         # گرفتن سرفصل‌های قبلی
+#         try:
+#             guide_section = Section.objects.get(
+#                 course=course,
+#                 order_number=section.order_number - 1
+#             )  # کارت راهنما
+#         except Section.DoesNotExist:
+#             guide_section = None
+
+#         try:
+#             video_section = Section.objects.get(
+#                 course=course,
+#                 order_number=section.order_number - 2
+#             )  # ویدیو
+#         except Section.DoesNotExist:
+#             video_section = None
+        
+#         try:
+#             video_section_next = Section.objects.get(
+#                 course=course,
+#                 order_number=section.order_number + 1
+#             )  # ویدیو
+#         except Section.DoesNotExist:
+#             video_section_next = None
+
+#         # دیسیریالایز و اعتبارسنجی پاسخ
+#         serializer = SubmitChallengeSerializer(
+#             data=request.data,
+#             context={'challenge_data': challenge_content.challenge_data}  # ⬅️ این خط رو حتماً داشته باش
+#         )
+#         if not serializer.is_valid():
+#             return Response(
+#                 {"error": "Invalid input."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         user_answers = serializer.validated_data['answers']
+#         challenge_data = challenge_content.challenge_data
+
+#         # ارزیابی پاسخ با هوش مصنوعی
+#         is_correct = evaluate_answer_with_ai(
+#             challenge_data=challenge_data,
+#             user_answers=user_answers
+#         )
+
+#         # ثبت تلاش
+#         attempt_number = ChallengeAttempt.objects.filter(
+#             user=request.user,
+#             content=challenge_content
+#         ).count() + 1
+
+#         ChallengeAttempt.objects.create(
+#             user=request.user,
+#             content=challenge_content,
+#             attempt_number=attempt_number,
+#             is_successful=is_correct
+#         )
+
+#         # 🔹 اگر پاسخ درست بود
+#         if is_correct:
+#             if video_section_next:
+#                 video_section_next.is_unlocked = False
+#                 video_section_next.save()
+#             return Response({
+#                 "is_correct": True,
+#                 "message": "Challenge passed! Next section unlocked.",
+#                 "next_section_unlocked": True,
+#                 "reset_required_video_order": video_section_next.order_number if video_section else None
+#             }, status=status.HTTP_200_OK)
+
+#         # 🔹 اگر پاسخ غلط بود و ۳ تلاش ناموفق داشته باشه
+#         if attempt_number >= 3:
+#             # 🔁 ریست پیشرفت ویدیو
+#             if video_section:
+#                 try:
+#                     video_content = video_section.contents.get(content_type='video')
+#                     UserContentProgress.objects.filter(
+#                         user=request.user,
+#                         content=video_content
+#                     ).update(
+#                         watched_duration=0,
+#                         is_completed=False
+#                     )
+#                 except:
+#                     pass
+
+#             # 🔁 قفل کردن سرفصل چالش و کارت راهنما
+#             # (در واقع، با ریست پیشرفت، دیگه دسترسی ندارن)
+#             # if guide_section:
+#             #     guide_section.is_unlocked = False
+#             #     guide_section.save()
+
+#             # if section:
+#             #     section.is_unlocked = False
+#             #     section.save()
+
+#             # 🔁 پاک کردن تلاش‌های چالش
+#             ChallengeAttempt.objects.filter(
+#                 user=request.user,
+#                 content=challenge_content
+#             ).delete()
+
+#             return Response({
+#                 "is_correct": False,
+#                 "message": "You've used all attempts. Review previous sections.",
+#                 "attempts_remaining": 0,
+#                 "locked_sections": [section.order_number, guide_section.order_number if guide_section else None],
+#                 "video_progress_reset": True,
+#                 "requires_video_review": True,
+#                 "challenge_section_order": section.order_number
+#             }, status=status.HTTP_200_OK)
+
+#         # 🔹 اگر هنوز تلاش باقی داره
+#         return Response({
+#             "is_correct": False,
+#             "message": f"Challenge failed. {3 - attempt_number} attempts left.",
+#             "attempts_remaining": 3 - attempt_number
+#         }, status=status.HTTP_200_OK)
+
 class SubmitChallengeView(APIView):
     def post(self, request, challenge_id):
         if not request.user.is_authenticated:
@@ -1228,28 +1500,36 @@ class SubmitChallengeView(APIView):
         section = challenge_content.section
         course = section.course
 
-        # چک کردن اینکه آیا کاربر ۸۰٪ ویدیوی سرفصل قبلی رو دیده
         try:
-            prev_section = Section.objects.get(
+            guide_section = Section.objects.get(
                 course=course,
                 order_number=section.order_number - 1
             )
-            video_content = prev_section.contents.get(content_type='video')
-            progress = UserContentProgress.objects.get(
-                user=request.user,
-                content=video_content
-            )
-            if not progress.is_completed:
-                return Response({
-                    "error": "You must watch 80% of the previous video to attempt this challenge."
-                }, status=status.HTTP_403_FORBIDDEN)
-        except:
-            return Response({
-                "error": "Prerequisite video not found or not completed."
-            }, status=status.HTTP_403_FORBIDDEN)
+        except Section.DoesNotExist:
+            guide_section = None
 
-        # دیسیریالایز و اعتبارسنجی پاسخ
-        serializer = SubmitChallengeSerializer(data=request.data)
+        try:
+            video_section = Section.objects.get(
+                course=course,
+                order_number=section.order_number - 2
+            )
+        except Section.DoesNotExist:
+            video_section = None
+
+        try:
+            video_section_next = Section.objects.get(
+                course=course,
+                order_number=section.order_number + 1
+            )
+        except Section.DoesNotExist:
+            video_section_next = None
+
+        # ✅ ارسال context شامل challenge_data
+        serializer = SubmitChallengeSerializer(
+            data=request.data,
+            context={'challenge_data': challenge_content.challenge_data}  # ⬅️ این خط رو اضافه کن
+        )
+
         if not serializer.is_valid():
             return Response(
                 {"error": "Invalid input."},
@@ -1257,12 +1537,11 @@ class SubmitChallengeView(APIView):
             )
 
         user_answers = serializer.validated_data['answers']
-        correct_answer = challenge_content.challenge_data.get('correct_answer')
 
-        # بررسی پاسخ
-        is_correct = user_answers == [correct_answer]  # یا منطق پیچیده‌تر برای چندگزینه‌ای
+        # ✅ ارزیابی پاسخ — فرض کنیم این تابع وجود داره و True/False برمی‌گردونه
+        is_correct = self.evaluate_answer(challenge_content.challenge_data, user_answers)
 
-        # ثبت تلاش
+        # ✅ ثبت تلاش — is_successful حتماً مقدار می‌گیره
         attempt_number = ChallengeAttempt.objects.filter(
             user=request.user,
             content=challenge_content
@@ -1272,62 +1551,50 @@ class SubmitChallengeView(APIView):
             user=request.user,
             content=challenge_content,
             attempt_number=attempt_number,
-            is_successful=is_correct
+            is_successful=is_correct  # ✅ اینجا حتماً True یا False است
         )
 
         # 🔹 اگر پاسخ درست بود
         if is_correct:
-            # باز کردن سرفصل بعدی
-            try:
-                next_section = Section.objects.get(
-                    course=course,
-                    order_number=section.order_number + 1
-                )
-                # در اینجا می‌تونی یه تابع utility فراخوانی کنیم
-                # ولی برای سادگی، فقط یه پیام می‌دیم
-                return Response({
-                    "is_correct": True,
-                    "message": "Challenge passed! Next section unlocked.",
-                    "next_section_unlocked": True
-                }, status=status.HTTP_200_OK)
-            except Section.DoesNotExist:
-                return Response({
-                    "is_correct": True,
-                    "message": "Challenge passed! This is the last section.",
-                    "next_section_unlocked": False
-                }, status=status.HTTP_200_OK)
+            if video_section_next:
+                video_section_next.is_unlocked = False
+                video_section_next.save()
+            return Response({
+                "is_correct": True,
+                "message": "Challenge passed! Next section unlocked.",
+                "next_section_unlocked": True,
+                "reset_required_video_order": video_section_next.order_number if video_section_next else None
+            }, status=status.HTTP_200_OK)
 
-        # 🔹 اگر پاسخ غلط بود
+        # 🔹 اگر ۳ بار اشتباه جواب داده
         if attempt_number >= 3:
-            # ❌ ۳ تلاش شکست خورده → قفل سرفصل فعلی و قبلی + ریست پیشرفت
-            try:
-                # ریست پیشرفت ویدیوی سرفصل قبلی
-                prev_video = prev_section.contents.get(content_type='video')
-                UserContentProgress.objects.filter(
-                    user=request.user,
-                    content=prev_video
-                ).update(
-                    watched_duration=0,
-                    total_duration=prev_video.total_duration or 0,
-                    is_completed=False
-                )
+            if video_section:
+                try:
+                    video_content = video_section.contents.get(content_type='video')
+                    UserContentProgress.objects.filter(
+                        user=request.user,
+                        content=video_content
+                    ).update(
+                        watched_duration=0,
+                        is_completed=False
+                    )
+                except:
+                    pass
 
-                # ریست تلاش‌های چالش
-                ChallengeAttempt.objects.filter(
-                    user=request.user,
-                    content=challenge_content
-                ).delete()
+            ChallengeAttempt.objects.filter(
+                user=request.user,
+                content=challenge_content
+            ).delete()
 
-                # پیام قفل شدن
-                return Response({
-                    "is_correct": False,
-                    "message": "You've used all attempts. Review previous sections.",
-                    "attempts_remaining": 0,
-                    "sections_locked": [section.order_number, section.order_number - 1],
-                    "progress_reset": True
-                }, status=status.HTTP_200_OK)
-            except:
-                pass
+            return Response({
+                "is_correct": False,
+                "message": "You've used all attempts. Review previous sections.",
+                "attempts_remaining": 0,
+                "locked_sections": [section.order_number, guide_section.order_number if guide_section else None],
+                "video_progress_reset": True,
+                "requires_video_review": True,
+                "challenge_section_order": section.order_number
+            }, status=status.HTTP_200_OK)
 
         # 🔹 اگر هنوز تلاش باقی داره
         return Response({
@@ -1335,3 +1602,53 @@ class SubmitChallengeView(APIView):
             "message": f"Challenge failed. {3 - attempt_number} attempts left.",
             "attempts_remaining": 3 - attempt_number
         }, status=status.HTTP_200_OK)
+
+    def evaluate_answer(self, challenge_data, user_answers):
+        """
+        بدون هوش مصنوعی — منطق داخلی
+        """
+        q_type = challenge_data.get("type")
+        if not q_type:
+            return False
+
+        if q_type == "multiple_choice_single":
+            return user_answers == [challenge_data.get("correct_option")]
+
+        elif q_type == "multiple_choice_multiple":
+            return sorted(user_answers) == sorted(challenge_data.get("correct_options", []))
+
+        elif q_type == "drag_drop_table":
+            correct_columns = challenge_data.get("columns", [])
+            if len(user_answers) != len(correct_columns):
+                return False
+            for col in correct_columns:
+                user_col = next((uc for uc in user_answers if uc["title"] == col["title"]), None)
+                if not user_col or set(user_col["options"]) != set(col["options"]):
+                    return False
+            return True
+
+        elif q_type == "image_based_mcq":
+            sub_questions = challenge_data.get("sub_questions", [])
+            for sq in sub_questions:
+                q = sq["question"]
+                correct = sq["correct_option"]
+                if user_answers.get(q) != str(correct):
+                    return False
+            return True
+
+        elif q_type == "descriptive":
+            sub_questions = challenge_data.get("sub_questions", [])
+            for sq in sub_questions:
+                q = sq["question"]
+                correct_answer = sq["answer"].lower()
+                user_answer = user_answers.get(q, "").lower()
+                correct_words = set(correct_answer.split())
+                user_words = set(user_answer.split())
+                if not correct_words:
+                    continue
+                match_ratio = len(correct_words & user_words) / len(correct_words)
+                if match_ratio < 0.6:
+                    return False
+            return True
+
+        return False
